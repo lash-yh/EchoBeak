@@ -14,7 +14,8 @@ def test_publish_preserves_existing_transcript(tmp_path):
     assert output.read_text(encoding="utf-8") == "existing"
 
 
-def test_publish_retries_concurrent_collision(tmp_path, monkeypatch):
+@pytest.mark.parametrize("symbolic_link", [False, True])
+def test_publish_retries_concurrent_collision(tmp_path, monkeypatch, symbolic_link):
     output = tmp_path / "transcript.md"
     draft = tmp_path / "draft.md"
     draft.write_text("new", encoding="utf-8")
@@ -25,15 +26,57 @@ def test_publish_retries_concurrent_collision(tmp_path, monkeypatch):
         nonlocal calls
         candidate = unique_path(path)
         if calls == 0:
-            candidate.write_text("concurrent", encoding="utf-8")
+            if symbolic_link:
+                candidate.symlink_to(tmp_path / "missing.md")
+            else:
+                candidate.write_text("concurrent", encoding="utf-8")
         calls += 1
+        assert calls <= 2, "Publication repeatedly selected an occupied path"
         return candidate
 
     monkeypatch.setattr(transcripts, "_unique_path", racing_path)
     published = transcripts.publish_transcript(draft, output)
     assert published.read_text(encoding="utf-8") == "new"
-    assert output.read_text(encoding="utf-8") == "concurrent"
+    if symbolic_link:
+        assert output.is_symlink()
+        assert not output.exists()
+    else:
+        assert output.read_text(encoding="utf-8") == "concurrent"
     assert calls == 2
+
+
+@pytest.mark.parametrize("target_exists", [False, True])
+def test_publish_skips_symbolic_links_in_base_and_suffix(tmp_path, target_exists):
+    output = tmp_path / "transcript.md"
+    target = tmp_path / "target.md"
+    if target_exists:
+        target.write_text("original", encoding="utf-8")
+    links = [output, tmp_path / "transcript-(1).md"]
+    for link in links:
+        link.symlink_to(target)
+    draft = tmp_path / "draft.md"
+    draft.write_text("new transcript", encoding="utf-8")
+    expected = tmp_path / "transcript-(2).md"
+
+    assert transcripts._unique_path(output) == expected
+    published = transcripts.publish_transcript(draft, output)
+
+    assert published == expected
+    assert published.read_text(encoding="utf-8") == "new transcript"
+    assert all(link.is_symlink() and link.readlink() == target for link in links)
+    if target_exists:
+        assert target.read_text(encoding="utf-8") == "original"
+    else:
+        assert not target.exists()
+
+
+def test_unique_path_stops_when_broken_symlinks_exhaust_candidates(tmp_path):
+    output = tmp_path / "transcript.md"
+    for name in ["transcript.md", "transcript-(1).md", "transcript-(2).md"]:
+        (tmp_path / name).symlink_to(tmp_path / "missing.md")
+
+    with pytest.raises(RuntimeError, match="after 2 attempts"):
+        transcripts._unique_path(output, max_attempts=2)
 
 
 def test_publish_failure_removes_partial_file(tmp_path, monkeypatch):

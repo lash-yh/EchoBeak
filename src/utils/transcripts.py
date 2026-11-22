@@ -9,12 +9,12 @@ from utils.paths import get_output_directory
 
 def _unique_path(base_path: Path, max_attempts: int = 1000) -> Path:
     """Find an unused path by adding a numeric suffix; does not reserve it."""
-    if not base_path.exists():
+    if not base_path.exists() and not base_path.is_symlink():
         return base_path
     stem, suffix = base_path.stem, base_path.suffix
     for n in range(1, max_attempts + 1):
         candidate: Path = base_path.parent / f"{stem}-({n}){suffix}"
-        if not candidate.exists():
+        if not candidate.exists() and not candidate.is_symlink():
             return candidate
     raise RuntimeError(f"could not find unique path for {base_path} after {max_attempts} attempts")
 
