@@ -251,7 +251,7 @@ def test_draft_write_failure_closes_model_and_keeps_io_error(tmp_path, make_wav,
     assert not (tmp_path / "output.md").exists()
 
 
-@pytest.mark.parametrize("noise_reduce", [False, True])
+@pytest.mark.parametrize("noise_reduce", [False, True, "stationary", "non-stationary"])
 @pytest.mark.parametrize("keep_wave", [False, True])
 def test_processed_chunks_follow_retention_option(
     tmp_path, make_wav, monkeypatch, noise_reduce, keep_wave
@@ -270,6 +270,7 @@ def test_processed_chunks_follow_retention_option(
         return result
 
     cleaner = Mock(side_effect=clean)
+    stationary_cleaner = Mock(side_effect=clean)
     calls = 0
 
     def transcribe(path, **kwargs):
@@ -297,13 +298,15 @@ def test_processed_chunks_follow_retention_option(
 
     monkeypatch.setattr(pipeline, "convert_to_wav_16_mono", convert)
     monkeypatch.setattr(transcriber, "reduce_noise", cleaner)
+    monkeypatch.setattr(transcriber, "reduce_noise_stationary", stationary_cleaner)
     monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
     saved_audio = tmp_path / "EchoBeak-Transcription"
     monkeypatch.setattr(output_paths, "_ECHOBEAK_DIR", saved_audio)
     pipeline.transcribe_file(
         source, tmp_path / "out.md", noise_reduce=noise_reduce, keep_wave=keep_wave
     )
-    assert cleaner.call_count == (2 if noise_reduce else 0)
+    assert cleaner.call_count == (2 if noise_reduce and noise_reduce != "stationary" else 0)
+    assert stationary_cleaner.call_count == (2 if noise_reduce == "stationary" else 0)
     assert source.is_file()
     if keep_wave:
         assert all(path.parent == saved_audio for path in paths + cleaned)
@@ -347,19 +350,41 @@ def test_target_source_stays_in_place_with_audio_retention(
         assert list(saved_audio.iterdir()) == cleaned
 
 
-@pytest.mark.parametrize("noise_reduce", [False, True])
+@pytest.mark.parametrize("options,noise_reduce", [
+    ([], False),
+    (["--noise-reduce"], "non-stationary"),
+    (["--noise-reduce", "stationary"], "stationary"),
+    (["--noise-reduce", "non-stationary"], "non-stationary"),
+])
 @pytest.mark.parametrize("keep_wave", [False, True])
-def test_cli_passes_audio_options(tmp_path, make_wav, monkeypatch, noise_reduce, keep_wave):
+def test_cli_passes_audio_options(
+    tmp_path, make_wav, monkeypatch, options, noise_reduce, keep_wave,
+):
     source = make_wav(tmp_path / "source.wav")
     output = tmp_path / "out.md"
     transcribe = Mock(return_value=output)
     monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name, **kwargs: output)
     monkeypatch.setattr(pipeline, "transcribe_file", transcribe)
-    options = (["--noise-reduce"] if noise_reduce else []) + (["--keep-wave"] if keep_wave else [])
+    options = options + (["--keep-wave"] if keep_wave else [])
     assert pipeline.main([str(source), "out", *options]) == 0
     transcribe.assert_called_once_with(
         source, output, language=None, noise_reduce=noise_reduce, keep_wave=keep_wave
     )
+
+
+def test_cli_rejects_invalid_noise_mode_before_processing(tmp_path, make_wav, monkeypatch):
+    source = make_wav(tmp_path / "source.wav")
+    load_model = Mock()
+    convert = Mock()
+    monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
+    monkeypatch.setattr(pipeline, "convert_to_wav_16_mono", convert)
+
+    with pytest.raises(SystemExit) as caught:
+        pipeline.main([str(source), "out", "--noise-reduce", "invalid"])
+
+    assert caught.value.code == 2
+    load_model.assert_not_called()
+    convert.assert_not_called()
 
 
 @pytest.mark.parametrize("language,supported", [("jap", ["ja", "en"]), ("es", ["en"])])

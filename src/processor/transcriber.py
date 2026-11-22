@@ -3,24 +3,27 @@
 import logging
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Literal
 
 from faster_whisper import WhisperModel
 
 from errors import TranscriptionError, UnsupportedLanguageError
-from processor.cleaner import reduce_noise
+from processor.cleaner import reduce_noise, reduce_noise_stationary
 from processor.chunks import AudioChunk
 
 
 def transcript_lines(
     model: WhisperModel, chunks: list[AudioChunk], temp_dir: Path, language: str | None,
-    *, noise_reduce: bool = False, keep_wave: bool = False,
+    *, noise_reduce: bool | Literal["stationary", "non-stationary"] = False,
+    keep_wave: bool = False,
 ) -> Iterator[str]:
     """Yield Markdown segments with global timestamps and clean processed audio."""
     for chunk in chunks:
         audio_path = chunk.path
         try:
             if noise_reduce:
-                audio_path = reduce_noise(chunk.path, temp_dir)
+                reducer = reduce_noise_stationary if noise_reduce == "stationary" else reduce_noise
+                audio_path = reducer(chunk.path, temp_dir)
             logging.info("Transcribing: %s", chunk.path.name)
             try:
                 segments, _ = model.transcribe(

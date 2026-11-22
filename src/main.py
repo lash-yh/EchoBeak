@@ -6,6 +6,7 @@ import tempfile
 from collections.abc import Sequence
 from contextlib import ExitStack
 from pathlib import Path
+from typing import Literal
 
 from errors import (
     AudioConversionError, NoiseReductionError, TranscriptionError, UnsupportedLanguageError,
@@ -30,7 +31,8 @@ def _check_ffmpeg() -> None:
 
 def transcribe_file(
     input_path: Path, output_path: Path, *, language: str | None = None,
-    noise_reduce: bool = False, keep_wave: bool = False,
+    noise_reduce: bool | Literal["stationary", "non-stationary"] = False,
+    keep_wave: bool = False,
 ) -> Path:
     """Transcribe audio with global timestamps and publish only after success."""
     input_path = input_path.expanduser()
@@ -92,8 +94,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     )
     parser.add_argument(
         "--noise-reduce",
-        action="store_true",
-        help="Aplica reducción de ruido antes de transcribir (desactivada por defecto)",
+        nargs="?",
+        const="non-stationary",
+        default=False,
+        choices=("stationary", "non-stationary"),
+        help=(
+            "Aplica reducción de ruido stationary o non-stationary antes de transcribir "
+            "(sin valor: non-stationary; desactivada por defecto)"
+        ),
     )
     parser.add_argument(
         "--keep-wave",
