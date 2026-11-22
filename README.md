@@ -1,6 +1,6 @@
-# audio-transcriber
+# EchoBeak
 
-Transcribe one audio or video file locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper). The pipeline checks the MIME type, converts the file to 16 kHz mono 16-bit WAV, splits audio longer than twenty minutes, optionally applies non-stationary noise reduction, and writes a timestamped Markdown transcript to `~/EchoBeak-Transcription`.
+Transcribe one audio or video file locally with [faster-whisper](https://github.com/SYSTRAN/faster-whisper). The pipeline checks the MIME type, converts the file to 16 kHz mono 16-bit WAV, splits audio longer than twenty minutes, optionally applies stationary or non-stationary noise reduction, and writes a timestamped Markdown transcript to `~/EchoBeak-Transcription` by default. Use `-o DIR` or `--output-dir DIR` to choose another transcript directory.
 
 ## Pipeline
 
@@ -11,15 +11,15 @@ input path + transcript name
   → twenty-minute split when the audio is longer than 1200 seconds
   → optional noise reduction (--noise-reduce)
   → faster-whisper
-  → ~/EchoBeak-Transcription/<name>.md
+  → <output-dir>/<name>.md (default: ~/EchoBeak-Transcription)
 ```
 
-1. **Input** — the command takes one audio or video path and a transcript file name.
+1. **Input** — the command takes one audio or video path and a transcript file name. Before loading the model or processing the file, it checks that `ffmpeg` is available on `PATH` and stops with an installation message if it is missing.
 2. **Conversion** — `python-magic` requires an `audio/*` or `video/*` MIME type. A WAV that is already 16 kHz, mono, and 16-bit skips conversion. Every other accepted file is converted with `ffmpeg` (`-vn -ac 1 -ar 16000 -sample_fmt s16`).
 3. **Splitting** — audio longer than twenty minutes is cut into consecutive twenty-minute WAV parts. Timestamps in the transcript stay continuous across parts.
-4. **Noise reduction** — disabled by default. With `--noise-reduce`, each part is processed with non-stationary `noisereduce` and written to a temporary WAV.
+4. **Noise reduction** — disabled by default. Use `--noise-reduce stationary` or `--noise-reduce non-stationary` to choose the mode for every part. `--noise-reduce` without a value uses non-stationary reduction. The result is written to a temporary WAV.
 5. **Transcription** — Whisper runs with beam size 5. Use `--language es` to specify the audio language for every chunk. When omitted, the model detects the language (`language=None`). `transcribe_file()` also accepts a language code when called from Python. The model is loaded before conversion to validate explicit codes against `model.supported_languages`. Unsupported codes stop the run with status 1 and a message listing the supported codes, before conversion or noise reduction. Language rejections from the library are also reported without a traceback.
-6. **Publish** — segments are written to a temporary draft and copied to `~/EchoBeak-Transcription` only after the whole file succeeds. Each segment is one line: `[start -> end] text`.
+6. **Publish** — segments are written to a temporary draft and copied to the selected output directory (default: `~/EchoBeak-Transcription`) only after the whole file succeeds. Each segment is one line: `[start -> end] text`.
 
 By default, each processed temporary WAV is deleted with `Path.unlink()`, and remaining temporary files are removed when the run ends. With `--keep-wave`, generated WAVs (conversion, split parts, and optional noise reduction) are saved in `~/EchoBeak-Transcription` with unique names and kept even if transcription fails. Incomplete files from failed conversion or noise reduction are still removed. The temporary Markdown draft is always removed. The source file stays in place.
 
@@ -54,11 +54,37 @@ To specify Spanish instead of automatic language detection:
 uv run src/main.py ~/recordings/meeting.mp4 meeting --language es
 ```
 
-To enable noise reduction:
+To choose the transcript directory:
 
 ```bash
-uv run src/main.py ~/recordings/meeting.mp4 meeting --noise-reduce
+uv run src/main.py ~/recordings/meeting.mp4 meeting --output-dir ~/Documents/transcripts
 ```
+
+To choose the noise reduction mode:
+
+```bash
+uv run src/main.py ~/recordings/meeting.mp4 meeting --noise-reduce stationary
+uv run src/main.py ~/recordings/meeting.mp4 meeting --noise-reduce non-stationary
+```
+
+`--noise-reduce` without a value still enables non-stationary reduction. Omit the
+option to disable reduction. Place this option after the input path and transcript
+name when using it without a value.
+
+For stationary noise reduction from Python, use `reduce_noise_stationary()` from
+`processor.cleaner` (with `src` on `PYTHONPATH`):
+
+```python
+from pathlib import Path
+from processor.cleaner import reduce_noise_stationary
+
+cleaned_path = reduce_noise_stationary(Path("recording.wav"), Path("/tmp"))
+```
+
+The function returns the path of a generated mono WAV and preserves the source
+file. `transcribe_file()` and `transcript_lines()` also accept
+`noise_reduce="stationary"` or `noise_reduce="non-stationary"`; `True` still selects
+non-stationary reduction and `False` disables it.
 
 To keep generated WAV files:
 
@@ -71,12 +97,13 @@ Arguments:
 | Argument | Meaning |
 |---|---|
 | `input_path` | Path to one audio or video file |
+| `-o DIR`, `--output-dir DIR` | Transcript directory (default: `~/EchoBeak-Transcription`). Accepts relative paths and `~`; missing directories are created. This option does not change where `--keep-wave` saves WAV files. |
 | `--keep-wave` | Keep generated WAV files in `~/EchoBeak-Transcription` (deleted by default). Can be combined with `--noise-reduce`. |
-| `--noise-reduce` | Enable non-stationary noise reduction (disabled by default). |
+| `--noise-reduce [MODE]` | Choose `stationary` or `non-stationary`. Without a value, use `non-stationary`; omitted, disable reduction. |
 | `--language CODE` | Audio language code, such as `es` (Spanish) or `en` (English). Omit for automatic detection. This selects the transcription language; it does not translate the audio. |
 | `name` | Transcript file name. It must be a single file name: empty names, `.`, `..`, and names containing `/` or `\` are rejected. `meeting` and `meeting.md` are both saved as `meeting.md` |
 
-The transcript is saved as `~/EchoBeak-Transcription/meeting.md`. The directory is created when needed. When that name is already taken, the new file is `meeting-(1).md`, then `meeting-(2).md`, and so on.
+The transcript is saved as `<output-dir>/meeting.md`, using `~/EchoBeak-Transcription` when no directory is specified. The directory is created when needed. When that name is already taken, the new file is `meeting-(1).md`, then `meeting-(2).md`, and so on. A destination that is a file or cannot be created stops the run before loading the model.
 
 Logs go to stderr. The Markdown file holds the transcript:
 
@@ -99,10 +126,10 @@ Run the command once per file to transcribe several recordings.
 ## Project structure
 
 ```
-audio-transcriber/
+EchoBeak/
 ├── src/
 │   ├── cli/                    # empty
-│   ├── errors.py               # Conversion, noise-reduction, and transcription errors
+│   ├── errors.py               # Conversion, noise-reduction, transcription, and language errors
 │   ├── main.py                 # CLI and pipeline
 │   ├── models/
 │   │   ├── __init__.py
@@ -110,7 +137,7 @@ audio-transcriber/
 │   │   └── runtime.py          # CUDA detection and memory cleanup
 │   ├── processor/
 │   │   ├── chunks.py           # Audio chunks and cumulative timestamp offsets
-│   │   ├── cleaner.py          # Non-stationary noise reduction
+│   │   ├── cleaner.py          # Stationary and non-stationary noise reduction
 │   │   ├── converter.py        # MIME check, ffmpeg conversion, twenty-minute splitting
 │   │   └── transcriber.py      # Chunk transcription, timestamps, processed audio cleanup
 │   └── utils/
@@ -143,12 +170,14 @@ An error while transcribing stops the run. The CPU model is the fallback for loa
 
 ## Tests
 
-`pytest` is configured in `pyproject.toml` (`pythonpath = ["src"]`). The command below supplies it for that run:
+`pytest` is included in the project dependencies and configured in `pyproject.toml` (`pythonpath = ["src"]`, `testpaths = ["tests"]`):
 
 ```bash
-uv run --with pytest pytest
+uv run pytest
 uv run python -m compileall src
 ```
+
+The automated suite mocks model loading and does not require a GPU or downloaded Whisper models. Syntax compilation alone does not verify an end-to-end transcription.
 
 ## Dependencies
 
@@ -156,9 +185,10 @@ uv run python -m compileall src
 |---|---|
 | `faster-whisper` | CTranslate2-based Whisper inference |
 | `ctranslate2` | CUDA device detection |
-| `noisereduce` | Non-stationary noise reduction |
+| `noisereduce` | Stationary and non-stationary noise reduction |
 | `soundfile` | WAV read/write for noise reduction |
 | `python-magic` | MIME type detection |
+| `pytest` | Automated tests |
 | `torch` | CUDA memory cleanup after a GPU model unloads |
 | `nvidia-cublas-cu12` | Bundled cuBLAS for CUDA runs |
 | `nvidia-cudnn-cu12` | Bundled cuDNN for CUDA runs |
