@@ -135,7 +135,9 @@ def test_pipeline_failures_preserve_cause_and_cleanup(
 
 def test_cli_returns_failure(tmp_path, make_wav, monkeypatch):
     source = make_wav(tmp_path / "source.wav")
-    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name: tmp_path / "result.md")
+    monkeypatch.setattr(
+        pipeline, "create_name_trans_path", lambda name, **kwargs: tmp_path / "result.md"
+    )
     monkeypatch.setattr(pipeline, "transcribe_file", Mock(side_effect=TranscriptionError("failed")))
     assert pipeline.main([str(source), "result"]) == 1
 
@@ -145,13 +147,65 @@ def test_cli_passes_language_to_pipeline(tmp_path, make_wav, monkeypatch, option
     source = make_wav(tmp_path / "source.wav")
     output = tmp_path / "result.md"
     transcribe = Mock(return_value=output)
-    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name: output)
+    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name, **kwargs: output)
     monkeypatch.setattr(pipeline, "transcribe_file", transcribe)
 
     assert pipeline.main([str(source), "result", *options]) == 0
     transcribe.assert_called_once_with(
         source, output, language=language, noise_reduce=False, keep_wave=False
     )
+
+
+@pytest.mark.parametrize("option", ["-o", "--output-dir"])
+@pytest.mark.parametrize("path_kind", ["absolute", "relative"])
+def test_cli_publishes_in_selected_directory(
+    tmp_path, make_wav, monkeypatch, option, path_kind,
+):
+    source = make_wav(tmp_path / "source.wav")
+    original = source.read_bytes()
+    monkeypatch.chdir(tmp_path)
+    default_dir = tmp_path / "default"
+    monkeypatch.setattr(output_paths, "_ECHOBEAK_DIR", default_dir)
+    directory = tmp_path / "custom transcripts" / "nested"
+    argument = {
+        "absolute": str(directory),
+        "relative": "custom transcripts/nested",
+    }[path_kind]
+    model = Mock()
+    model.transcribe.side_effect = lambda *args, **kwargs: (
+        iter([SimpleNamespace(start=0, end=1, text=" canción")]), None
+    )
+
+    @contextmanager
+    def load_model():
+        yield model
+
+    monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
+    monkeypatch.setattr(pipeline, "convert_to_wav_16_mono", lambda *args, **kwargs: [source])
+    for _ in range(2):
+        assert pipeline.main([str(source), "meeting", option, argument]) == 0
+    for name in ["meeting.md", "meeting-(1).md"]:
+        assert (directory / name).read_text(encoding="utf-8") == (
+            "[0.00s -> 1.00s]  canción\n"
+        )
+    assert source.read_bytes() == original
+    assert not default_dir.exists()
+
+
+@pytest.mark.parametrize("nested", [False, True])
+def test_cli_rejects_file_as_output_directory_before_loading_model(
+    tmp_path, make_wav, monkeypatch, nested,
+):
+    source = make_wav(tmp_path / "source.wav")
+    destination = tmp_path / "occupied"
+    destination.write_text("existing", encoding="utf-8")
+    load_model = Mock()
+    monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
+    output_dir = destination / "nested" if nested else destination
+
+    assert pipeline.main([str(source), "meeting", "-o", str(output_dir)]) == 1
+    load_model.assert_not_called()
+    assert destination.read_text(encoding="utf-8") == "existing"
 
 
 def test_draft_write_failure_closes_model_and_keeps_io_error(tmp_path, make_wav, monkeypatch):
@@ -299,7 +353,7 @@ def test_cli_passes_audio_options(tmp_path, make_wav, monkeypatch, noise_reduce,
     source = make_wav(tmp_path / "source.wav")
     output = tmp_path / "out.md"
     transcribe = Mock(return_value=output)
-    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name: output)
+    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name, **kwargs: output)
     monkeypatch.setattr(pipeline, "transcribe_file", transcribe)
     options = (["--noise-reduce"] if noise_reduce else []) + (["--keep-wave"] if keep_wave else [])
     assert pipeline.main([str(source), "out", *options]) == 0
@@ -329,7 +383,7 @@ def test_invalid_language_stops_before_audio_processing(
     monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
     monkeypatch.setattr(pipeline, "convert_to_wav_16_mono", convert)
     monkeypatch.setattr(transcriber, "reduce_noise", cleaner)
-    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name: output)
+    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name, **kwargs: output)
     assert pipeline.main([str(source), "out", "--language", language, "--noise-reduce"]) == 1
     convert.assert_not_called()
     cleaner.assert_not_called()
@@ -375,7 +429,7 @@ def test_library_language_rejection_is_reported_and_cleaned(
 
     monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
     monkeypatch.setattr(pipeline, "convert_to_wav_16_mono", convert)
-    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name: output)
+    monkeypatch.setattr(pipeline, "create_name_trans_path", lambda name, **kwargs: output)
     with pytest.raises(pipeline.UnsupportedLanguageError) as caught:
         pipeline.transcribe_file(source, output, language="ja")
     assert caught.value.__cause__ is failure

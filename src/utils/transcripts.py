@@ -25,14 +25,19 @@ def validate_transcript_name(name: str) -> None:
         raise ValueError("Transcript name must be a file name, not a path")
 
 
-def create_name_trans_path(name: str | None = None) -> Path:
+def create_name_trans_path(
+    name: str | None = None, *, output_dir: Path | None = None,
+) -> Path:
+    """Create the destination directory and choose an unused transcript name."""
     if name is None:
         new_name = f"trans-{date.today():%Y-%m-%d}.md"
     else:
         validate_transcript_name(name)
         new_name = f"{name.removesuffix('.md')}.md"
 
-    final_name: Path = get_output_directory() / new_name
+    directory = get_output_directory() if output_dir is None else output_dir.expanduser()
+    directory.mkdir(parents=True, exist_ok=True)
+    final_name: Path = directory / new_name
 
     return _unique_path(final_name)
 

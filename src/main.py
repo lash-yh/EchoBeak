@@ -80,6 +80,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("input_path", type=Path, help="Ruta del archivo de audio o video")
     parser.add_argument("name", help="Nombre del archivo Markdown de transcripción")
     parser.add_argument(
+        "-o", "--output-dir",
+        type=Path,
+        metavar="DIR",
+        help="Directorio de la transcripción (por defecto: ~/EchoBeak-Transcription)",
+    )
+    parser.add_argument(
         "--language",
         metavar="CODE",
         help="Código del idioma del audio (por ejemplo, es o en); por defecto se detecta automáticamente",
@@ -100,7 +106,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         validate_transcript_name(args.name)
         output_path = transcribe_file(
-            args.input_path, create_name_trans_path(args.name), language=args.language,
+            args.input_path,
+            create_name_trans_path(args.name, output_dir=args.output_dir),
+            language=args.language,
             noise_reduce=args.noise_reduce, keep_wave=args.keep_wave,
         )
     except UnsupportedLanguageError as error:

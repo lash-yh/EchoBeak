@@ -1,6 +1,17 @@
 import pytest
 
+from utils import paths as output_paths
 from utils import transcripts
+
+
+def test_default_transcript_directory_and_dated_name(tmp_path, monkeypatch):
+    directory = tmp_path / "EchoBeak-Transcription"
+    monkeypatch.setattr(output_paths, "_ECHOBEAK_DIR", directory)
+
+    output = transcripts.create_name_trans_path()
+
+    assert output == directory / f"trans-{transcripts.date.today():%Y-%m-%d}.md"
+    assert directory.is_dir()
 
 
 def test_publish_preserves_existing_transcript(tmp_path):
