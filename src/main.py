@@ -1,5 +1,6 @@
 import argparse
 import logging
+import shutil
 import sys
 import tempfile
 from collections.abc import Sequence
@@ -21,6 +22,12 @@ from utils.transcripts import (
 )
 
 
+def _check_ffmpeg() -> None:
+    """Fail before processing if ffmpeg is unavailable on PATH."""
+    if shutil.which("ffmpeg") is None:
+        raise AudioConversionError("ffmpeg not found in PATH. Install ffmpeg to continue.")
+
+
 def transcribe_file(
     input_path: Path, output_path: Path, *, language: str | None = None,
     noise_reduce: bool = False, keep_wave: bool = False,
@@ -31,6 +38,7 @@ def transcribe_file(
     if not input_path.is_file():
         raise AudioConversionError(f"Input file does not exist: {input_path}")
     validate_transcript_name(output_path.name)
+    _check_ffmpeg()
 
     with ExitStack() as stack:
         try:

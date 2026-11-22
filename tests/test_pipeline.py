@@ -5,9 +5,38 @@ from unittest.mock import Mock
 import pytest
 
 import main as pipeline
-from errors import NoiseReductionError, TranscriptionError
+from errors import AudioConversionError, NoiseReductionError, TranscriptionError
 from processor import transcriber
 from utils import paths as output_paths
+
+
+@pytest.fixture(autouse=True)
+def ffmpeg_available(monkeypatch):
+    monkeypatch.setattr(pipeline.shutil, "which", Mock(return_value="/usr/bin/ffmpeg"))
+
+
+@pytest.mark.parametrize("suffix", [".wav", ".mp4"])
+def test_missing_ffmpeg_stops_before_model_loading_and_processing(
+    tmp_path, monkeypatch, suffix,
+):
+    source = tmp_path / f"source{suffix}"
+    source.write_bytes(b"original")
+    output = tmp_path / "result.md"
+    which = Mock(return_value=None)
+    load_model = Mock()
+    convert = Mock()
+    monkeypatch.setattr(pipeline.shutil, "which", which)
+    monkeypatch.setattr(pipeline, "load_whisper_model", load_model)
+    monkeypatch.setattr(pipeline, "convert_to_wav_16_mono", convert)
+
+    with pytest.raises(AudioConversionError, match="ffmpeg not found in PATH"):
+        pipeline.transcribe_file(source, output)
+
+    which.assert_called_once_with("ffmpeg")
+    load_model.assert_not_called()
+    convert.assert_not_called()
+    assert source.read_bytes() == b"original"
+    assert not output.exists()
 
 
 def test_pipeline_accumulates_timestamps_and_preserves_text(tmp_path, make_wav, monkeypatch):
